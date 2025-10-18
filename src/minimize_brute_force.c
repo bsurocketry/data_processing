@@ -64,6 +64,16 @@ static double E(struct data_sample * samples, double * M, double Ve, double mB, 
    return err;
 }
 
+#define MIN(a,b) \
+   ((a) < (b) ? (a) : (b))
+
+static inline double triangle(double A, double fA, double B, double fB) {
+   double height = fB - fA;
+   double width  = (B - A);
+   double rect = width * MIN(fA,fB);
+   return ((height * width) / 2.0) + rect;
+}
+
 #define SWAP(x,y)        \
    do {                  \
       double * temp = x; \
@@ -185,6 +195,7 @@ int main(int argc, char ** argv) {
    }
 
    printf("best_err: %e\n",best_err);
+   printf("best_Ve:  %lf\n",best_Ve);
 
    FILE * prior_data = fopen("prior_data.txt","w");
    FILE * post_data = fopen("post_data.txt","w");
@@ -207,6 +218,18 @@ int main(int argc, char ** argv) {
 
       time += data_vec[i].sec;
    }
+
+   double total_impulse = 0.0;
+   time = 0.0;
+   for (int i = 0; i < count-1; ++i) {
+      time += samples[i].sec;
+      total_impulse += triangle(time,
+                                best_M[i]*best_Ve,
+                                time + samples[i+1].sec,
+                                best_M[i+1]*best_Ve);
+   }
+
+   printf("total impulse: %lf\n",total_impulse);
 
    fclose(prior_data);
    fclose(post_data);
