@@ -21,6 +21,17 @@ struct data_sample {
    double thrust;
 };
 
+typedef struct constant_values {
+   double A_star;
+   double Pe;
+   double Po;
+   double Pa;
+   double Ae;
+   double k;
+   double R;
+   double pp;
+} constant_values;
+
 static void compute_matching_M(struct data_sample * samples, double * M, double Ve, int count) {
    double accum = 0.0; /* previous mass burned */
 
@@ -31,6 +42,34 @@ static void compute_matching_M(struct data_sample * samples, double * M, double 
       accum += M[i] * samples[i].sec;
 
    }
+}
+
+static void compute_matching_Po(double * M, double * Po, double To, constant_values * c, int count) {
+
+   for (int i = 0; i < count; ++i) {
+      Po[i] = M[i] / (c->A_star*sqrt((c->k/(c->R*To))*(pow(2.0/(c->k+1),(c->k+1.0)/(2*(c->k-1))))));
+   }
+
+}
+
+static double Po_E(struct data_sample * samples, double * Po, constant_values * c, int count) {
+
+   double err = 0.0;
+
+   for (int i = 0; i < count; ++i) {
+
+      double lhs = pow((samples[i].thrust-(c->Pe-c->Pa)*c->Ae)/c->A_star,2.0);
+
+      double rhs = ((2.0*c->k*c->k)/(c->k-1))*pow(2.0/(c->k+1),(c->k+1)/(c->k-1));
+
+      rhs *= (Po[i]*Po[i])-(pow(c->Pe,(c->k-1)/c->k)*pow(c->Po,2.0-(c->k-1)/c->k));
+
+      /* squared error */
+      err += (rhs - lhs) * (rhs - lhs);
+
+   }
+
+   return err;
 }
 
 /* error */
@@ -174,6 +213,10 @@ int main(int argc, char ** argv) {
    double mB = (prior - post) / GRAVITY;
    printf("mass burned is: %lf\n",mB);
 
+   double prior_time = 0.0;
+   for (int i = 0; i < start; ++i)
+      prior_time += data_vec[i].sec;
+
    struct data_sample * samples = &data_vec[start];
    int count = (end - start);
    double * M =  malloc(sizeof(double)*(count));
@@ -212,9 +255,13 @@ int main(int argc, char ** argv) {
       if (i < start || i >= end)
          fprintf(post_data,"%.20lf\t%.20lf\n",
                  time,data_vec[i].thrust);
-      else
+      else {
          fprintf(post_data,"%.20lf\t%.20lf\n",
                  time,best_M[i-start]*best_Ve);
+
+         /* rewrite history! xD */
+         data_vec[i].thrust = best_M[i-start]*best_Ve;
+      }
 
       time += data_vec[i].sec;
    }
@@ -231,11 +278,57 @@ int main(int argc, char ** argv) {
 
    printf("total impulse: %lf\n",total_impulse);
 
+   /* now we will begin the process of solving for Po and k
+    * - these are pressure of exhaust and burn rate.        */
+
+   constant_values c;
+   bzero(&c,sizeof(constant_values));
+   c.Pe = 1.013 * 1e5;
+   c.k = 1.21;
+   c.Pa = c.Pe;
+   c.Ae = 0.0;
+   c.A_star = (M_PI / 4.0) * 10e-5;
+   c.R = 208.37;
+   c.pp = 1820.0;
+
+   double best_To = 0.0;
+   best_err = 99999999999999999999999999999999.0;
+   double * Po = malloc(sizeof(double)*(count));
+   double * best_Po = malloc(sizeof(double)*(count));
+   for (double To = 0.0; To < 10000.0; To += 0.00625) {
+      compute_matching_Po(best_M,Po,To,&c,count);
+      double err = Po_E(samples,Po,&c,count);
+
+      if (err < best_err) {
+         SWAP(Po,best_Po);
+         best_To = To;
+         best_err = err;
+      }
+   }
+
+   printf("best_err: %e\n",best_err);
+   printf("best_To: %lf\n",best_To);
+
+   FILE * Po_data = fopen("chamber_pressure.txt","w");
+   fprintf(Po_data,"seconds\tpressure(Pa)\n");
+
+   time = prior_time;
+   for (int i = 0; i < count; ++i) {
+
+      fprintf(Po_data,"%.20lf\t%.20lf\n",
+              time,best_Po[i]);
+
+      time += samples[i].sec;
+   }
+
    fclose(prior_data);
    fclose(post_data);
+   fclose(Po_data);
 
    free(M);
    free(best_M);
    free(data_vec);
+   free(Po);
+   free(best_Po);
    return 0;
 }
